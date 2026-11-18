@@ -31,6 +31,8 @@ def load_dotenv(env_path=".env"):
 PORTFOLIO_DESC = {
     "TQQQ": "🔥 TQQQ 100% (3.0배 공격)",
     "QQQ50_QLD50": "🛡️ QQQ 50% + QLD 50% (1.5배 방어)",
+    "SOXL": "🔥 SOXL 100% (3.0배 공격)",
+    "USD50_QQQM50": "🛡️ USD 50% + QQQM 50% (1.5배 방어)",
     "CASH": "💵 현금/단기채 100% (0.0배 대피)",
 }
 
@@ -114,6 +116,26 @@ def build_daily_message():
         f"🔍 [향후 전환 기준점]\n"
         f"{trigger_note}"
     )
+    sox_csv = Path(__file__).resolve().parent / "backtest_result_soxl.csv"
+    if sox_csv.exists():
+        try:
+            sdf = pd.read_csv(sox_csv, index_col=0, parse_dates=True).dropna(subset=["target"])
+            st_today = sdf.iloc[-1]
+            st_prev = sdf.iloc[-2]
+            s_tgt = str(st_today["target"])
+            s_prev_tgt = str(st_prev["target"])
+            s_chg = s_tgt != s_prev_tgt
+            s_icon = "🚨 변경" if s_chg else "✅ 유지"
+            msg += (
+                f"\n━━━━━━━━━━━━━━━━━━━━\n"
+                f"⚡ [반도체(^SOX) 레짐 전략]\n"
+                f"• 목표: {PORTFOLIO_DESC.get(s_tgt, s_tgt)} ({s_icon})\n"
+                f"• 레짐: {st_today['state']} / SOX {st_today['sox']:,.1f} (250일선 {st_today['ma250']:,.1f})\n"
+                f"• 52주 낙폭(DD): -{st_today['dd']*100:.2f}%"
+            )
+        except Exception:
+            pass
+
     dashboard_url = os.environ.get("DASHBOARD_URL", "").strip()
     if dashboard_url:
         msg += f"\n━━━━━━━━━━━━━━━━━━━━\n📱 모바일 대시보드:\n{dashboard_url}"

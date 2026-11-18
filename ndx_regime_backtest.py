@@ -335,10 +335,16 @@ def main():
         fig.tight_layout(); fig.savefig("backtest_equity.png", dpi=120)
     except Exception as e:
         print("차트 생략:", e)
+    if not synthetic:
+        try:
+            from soxl_regime_backtest import generate_soxl_backtest_csv
+            generate_soxl_backtest_csv()
+        except Exception as e:
+            print("SOXL 백테스트 CSV 갱신 생략:", e)
     try:
         from web_dashboard import generate_dashboard
         sys.argv.append("--no-open")
-        generate_dashboard("backtest_result.csv", "dashboard.html")
+        generate_dashboard("backtest_result.csv", "dashboard.html", "backtest_result_soxl.csv")
     except Exception as e:
         print("웹 대시보드 갱신 생략:", e)
     print("\n저장: backtest_result.csv / backtest_summary.csv / backtest_equity.png / dashboard.html")
