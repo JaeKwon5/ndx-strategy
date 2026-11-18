@@ -16,23 +16,15 @@ if not exist ".git" (
 
 echo [2/4] 프로젝트 파일을 스테이징 및 커밋합니다 (.venv 및 .env는 자동 제외)...
 git add .
-git commit -m "feat: initial NDX regime strategy & mobile dashboard"
+git diff --staged --quiet || git commit -m "feat: update NDX regime strategy & mobile dashboard"
 
+set REPO_URL=https://github.com/JaeKwon5/ndx-strategy.git
 echo.
-set /p REPO_URL="GitHub 저장소 주소(예: https://github.com/아이디/ndx-strategy.git)를 붙여넣고 Enter를 누르세요: "
-
-if "%REPO_URL%"=="" (
-    echo [취소] 저장소 주소가 입력되지 않았습니다.
-    pause
-    exit /b 1
-)
-
-echo.
-echo [3/4] 원격 저장소(origin) 연결 중...
+echo [3/4] 원격 저장소(%REPO_URL%) 연결 중...
 git remote remove origin >nul 2>nul
 git remote add origin %REPO_URL%
 
-echo [4/4] GitHub로 업로드(Push) 중...
+echo [4/4] GitHub로 업로드(Push) 중... (로그인 창이 뜨면 승인해 주세요)
 git push -u origin main
 
 echo.
