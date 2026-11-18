@@ -24,7 +24,7 @@
         <span class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
         <span class="font-semibold text-slate-200">미국장 기준일: 2026-11-17</span>
       </div>
-      <span class="text-slate-400 font-mono">갱신: 2026-11-18 14:54 KST</span>
+      <span class="text-slate-400 font-mono">갱신: 2026-11-18 17:17 KST</span>
     </div>
   </div>
 
@@ -53,7 +53,7 @@
           <div class="text-lg font-bold mt-0.5 text-emerald-400">
             BULL (상승장)
           </div>
-          <div class="text-[11px] text-slate-400 mt-0.5 truncate">상향돌파 ×1.01 / 하향이탈 ×0.95</div>
+          <div class="text-[11px] text-slate-400 mt-0.5 truncate">NDX 27,001.8 / 250일선 27,525.4 (98.1%)</div>
         </div>
 
         <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5">
@@ -149,9 +149,9 @@
           <div>
             <div class="flex justify-between mb-1">
               <span class="text-slate-400">① NDX / 250일선 비율 (돌파 101% / 이탈 95%)</span>
-              <span id="sim-ma-txt" class="font-mono font-bold">104.0%</span>
+              <span id="sim-ma-txt" class="font-mono font-bold">98.1%</span>
             </div>
-            <input id="sim-ma" type="range" min="88" max="115" step="0.2" value="104.0" class="w-full accent-indigo-500" />
+            <input id="sim-ma" type="range" min="88" max="115" step="0.2" value="98.1" class="w-full accent-indigo-500" />
           </div>
 
           <div>
@@ -321,7 +321,7 @@
     [simMa, simVix, simDd].forEach(el => el.addEventListener('input', updateSim));
     document.querySelectorAll('input[name="sim-prev"]').forEach(el => el.addEventListener('change', updateSim));
     document.getElementById('sim-reset').addEventListener('click', () => {
-      simMa.value = '104.0';
+      simMa.value = '98.1';
       simVix.value = '21.37';
       simDd.value = '13.52';
       updateSim();
