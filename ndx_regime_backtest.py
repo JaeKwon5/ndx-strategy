@@ -12,8 +12,11 @@ NDX 250일선 레짐 + VIX10 + 52주 낙폭 레버리지 전략 백테스트 (�
        python ndx_regime_backtest.py --synthetic (코드 동작 점검용 가상 데이터)
 """
 import sys
+from pathlib import Path
 import numpy as np
 import pandas as pd
+
+BASE_DIR = Path(__file__).resolve().parent
 
 # ---------------- 파라미터 ----------------
 P = dict(
@@ -32,18 +35,31 @@ TD = 252
 
 
 # ---------------- 데이터 ----------------
-def load_real():
+def load_real(retries=4):
+    import time
     import yfinance as yf
-    raw = yf.download(["^NDX", "^VIX", "^IRX"], start="1985-10-01",
-                      auto_adjust=False, progress=False)
-    close = raw["Close"].rename(columns={"^NDX": "ndx", "^VIX": "vix", "^IRX": "irx"})
-    open_p = raw["Open"]["^NDX"].rename("ndx_open")
-
-    df = close.join(open_p)
-    # 초기 Open 데이터가 없거나 0인 경우 전일 종가로 대체
-    df["ndx_open"] = df["ndx_open"].where(df["ndx_open"] > 0, df["ndx"].shift(1)).fillna(df["ndx"])
-    df["irx"] = df["irx"].ffill().bfill() / 100.0
-    return df.dropna(subset=["ndx", "vix"])
+    last_err = None
+    for attempt in range(retries):
+        try:
+            raw = yf.download(
+                ["^NDX", "^VIX", "^IRX"],
+                start="1985-10-01",
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+            )
+            if raw is not None and not raw.empty:
+                close = raw["Close"].rename(columns={"^NDX": "ndx", "^VIX": "vix", "^IRX": "irx"})
+                if "ndx" in close.columns and "vix" in close.columns and close["ndx"].dropna().shape[0] > 300:
+                    open_p = raw["Open"]["^NDX"].rename("ndx_open")
+                    df = close.join(open_p)
+                    df["ndx_open"] = df["ndx_open"].where(df["ndx_open"] > 0, df["ndx"].shift(1)).fillna(df["ndx"])
+                    df["irx"] = df["irx"].ffill().bfill() / 100.0
+                    return df.dropna(subset=["ndx", "vix"])
+        except Exception as e:
+            last_err = e
+        time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"Yahoo Finance 데이터 다운로드 실패: {last_err}")
 
 
 def load_synthetic(n=10500, seed=7):
@@ -318,8 +334,8 @@ def main():
         "equity": (1 + ret).cumprod(),
     })
     out = out.join(sig[["state", "vix10", "dd", "target"]])
-    out.to_csv("backtest_result.csv", encoding="utf-8-sig")
-    tbl.to_csv("backtest_summary.csv", encoding="utf-8-sig")
+    out.to_csv(BASE_DIR / "backtest_result.csv", encoding="utf-8-sig")
+    tbl.to_csv(BASE_DIR / "backtest_summary.csv", encoding="utf-8-sig")
 
     try:
         import matplotlib
@@ -332,7 +348,7 @@ def main():
         ax.plot((1 + etf_cc["QQQ"].loc[ret.index]).cumprod(), label="QQQ B&H (synthetic)", alpha=.5)
         ax.set_yscale("log"); ax.legend(); ax.grid(alpha=.3)
         ax.set_title("NDX regime strategy (log scale)")
-        fig.tight_layout(); fig.savefig("backtest_equity.png", dpi=120)
+        fig.tight_layout(); fig.savefig(BASE_DIR / "backtest_equity.png", dpi=120)
     except Exception as e:
         print("차트 생략:", e)
     if not synthetic:
@@ -343,7 +359,7 @@ def main():
             print("SOXL 백테스트 CSV 갱신 생략:", e)
     try:
         from web_dashboard import generate_dashboard
-        sys.argv.append("--no-open")
+        sys.argv.extend(["--no-open", "--skip-refresh"])
         generate_dashboard("backtest_result.csv", "dashboard.html", "backtest_result_soxl.csv")
     except Exception as e:
         print("웹 대시보드 갱신 생략:", e)

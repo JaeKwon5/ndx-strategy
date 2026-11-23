@@ -1,4 +1,8 @@
 @echo off
-chcp 65001 > nul
+setlocal
 cd /d "%~dp0"
-".venv\Scripts\python.exe" web_dashboard.py %*
+if exist "C:\Python314\python.exe" (
+    "C:\Python314\python.exe" web_dashboard.py %*
+) else (
+    ".venv\Scripts\python.exe" web_dashboard.py %*
+)

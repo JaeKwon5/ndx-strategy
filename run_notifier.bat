@@ -1,4 +1,8 @@
 @echo off
-chcp 65001 > nul
+setlocal
 cd /d "%~dp0"
-".venv\Scripts\python.exe" daily_signal_notifier.py %*
+if exist "C:\Python314\python.exe" (
+    "C:\Python314\python.exe" daily_signal_notifier.py %*
+) else (
+    ".venv\Scripts\python.exe" daily_signal_notifier.py %*
+)

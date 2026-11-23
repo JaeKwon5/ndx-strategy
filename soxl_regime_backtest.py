@@ -43,25 +43,34 @@ TARGET_NAMES_SOX = {
 }
 
 
-def load_market_data():
+def load_market_data(retries=4):
+    import time
     tickers = ["^NDX", "^SOX", "^VIX", "^IRX", "SOXL", "USD", "QQQ", "TQQQ", "QLD"]
-    raw = yf.download(tickers, start="1994-01-01", auto_adjust=True, progress=False)
+    last_err = None
+    for attempt in range(retries):
+        try:
+            raw = yf.download(tickers, start="1994-01-01", auto_adjust=True, progress=False, threads=False)
+            if raw is not None and not raw.empty:
+                close = raw["Close"]
+                open_p = raw["Open"]
 
-    close = raw["Close"]
-    open_p = raw["Open"]
+                df = pd.DataFrame(index=close.index)
+                for t, col in [("^NDX", "ndx"), ("^SOX", "sox"), ("^VIX", "vix"), ("^IRX", "irx"),
+                               ("SOXL", "soxl_real"), ("USD", "usd_real"), ("QQQ", "qqq_real"),
+                               ("TQQQ", "tqqq_real"), ("QLD", "qld_real")]:
+                    if t in close.columns:
+                        df[col] = close[t]
+                    if t in open_p.columns and col not in ("vix", "irx"):
+                        o = open_p[t]
+                        df[col + "_open"] = o.where(o > 0, df[col].shift(1)).fillna(df[col])
 
-    df = pd.DataFrame(index=close.index)
-    for t, col in [("^NDX", "ndx"), ("^SOX", "sox"), ("^VIX", "vix"), ("^IRX", "irx"),
-                   ("SOXL", "soxl_real"), ("USD", "usd_real"), ("QQQ", "qqq_real"),
-                   ("TQQQ", "tqqq_real"), ("QLD", "qld_real")]:
-        if t in close.columns:
-            df[col] = close[t]
-        if t in open_p.columns and col not in ("vix", "irx"):
-            o = open_p[t]
-            df[col + "_open"] = o.where(o > 0, df[col].shift(1)).fillna(df[col])
-
-    df["irx"] = df["irx"].ffill().bfill() / 100.0
-    return df.dropna(subset=["ndx", "sox", "vix"])
+                if "ndx" in df.columns and "sox" in df.columns and df["sox"].dropna().shape[0] > 300:
+                    df["irx"] = df["irx"].ffill().bfill() / 100.0
+                    return df.dropna(subset=["ndx", "sox", "vix"])
+        except Exception as e:
+            last_err = e
+        time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"Yahoo Finance 반도체 데이터 다운로드 실패: {last_err}")
 
 
 def build_signal(df, price_col="sox", up=1.01, dn=0.95, vix_hi=28.0, vix_re=25.0,

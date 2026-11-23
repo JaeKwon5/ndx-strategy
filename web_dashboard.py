@@ -2,7 +2,9 @@
 NDX(나스닥100) & SOX(필라델피아 반도체) 250일선 레짐 + VIX10 + 52주 낙폭 전략 모바일/웹 대시보드
 - 스마트폰 최적화(반응형 UI + 홈 화면 웹앱/PWA 메타태그) 지원
 - 상단 탭 전환으로 [나스닥 TQQQ / QLD+QQQ] 전략과 [반도체 SOXL / USD+QQQM (^SOX 신호)] 전략을 즉시 비교
-- GitHub Pages 정적 배포용 index.html 및 로컬 확인용 dashboard.html 동시 생성
+- 기준일 자동 업데이트:
+  1) 로컬 실행 시(web_dashboard.py) CSV 기준일이 최신 미국장 마감일보다 이전이면 자동으로 Yahoo Finance에서 최신 데이터를 받아 갱신
+  2) 웹 브라우저(스마트폰/PC) 접속 시 캐시 방지(no-store) 최신 CSV 조회 + Yahoo Finance 실시간 API 동기화로 GitHub Actions 지연 시에도 브라우저에서 즉시 최신 기준일 계산 및 표시
 """
 import sys
 import json
@@ -17,6 +19,56 @@ from ndx_regime_backtest import P
 
 BASE_DIR = Path(__file__).resolve().parent
 KST = timezone(timedelta(hours=9))
+EST = timezone(timedelta(hours=-5))
+
+
+def _latest_expected_us_trading_date() -> str:
+    """미국 동부시간(EST) 기준 가장 최근 마감된 평일(거래일) 날짜(YYYY-MM-DD) 반환"""
+    now_est = datetime.now(EST)
+    # 미국 정규장 마감(16:00 EST) + 데이터 정산 여유(20분) 이전이면 전일 기준
+    d = now_est.date()
+    if now_est.hour < 16 or (now_est.hour == 16 and now_est.minute < 20):
+        d = d - timedelta(days=1)
+    while d.weekday() >= 5:  # 토(5), 일(6)이면 금요일로 이동
+        d = d - timedelta(days=1)
+    return d.strftime("%Y-%m-%d")
+
+
+def auto_refresh_csv_if_stale(p_ndx: Path, p_sox: Path):
+    """로컬 CSV 파일의 마지막 날짜가 최근 미국장 마감일보다 이전이면 자동으로 최신 데이터를 다운로드하여 갱신"""
+    expected_dt = _latest_expected_us_trading_date()
+    need_update = False
+
+    if not p_ndx.exists() or not p_sox.exists():
+        need_update = True
+    else:
+        try:
+            df_check = pd.read_csv(p_ndx, index_col=0)
+            last_dt = str(df_check.index[-1])[:10]
+            if last_dt < expected_dt:
+                print(f"[자동 갱신] 현재 CSV 기준일({last_dt})이 최근 미국장({expected_dt})보다 이전입니다. 최신 데이터를 다운로드합니다...")
+                need_update = True
+        except Exception:
+            need_update = True
+
+    if need_update:
+        try:
+            import ndx_regime_backtest
+            from soxl_regime_backtest import generate_soxl_backtest_csv
+            df = ndx_regime_backtest.load_real()
+            ret, sig, _, _ = ndx_regime_backtest.backtest(df, exec_mode="next_open")
+            out = pd.DataFrame({
+                "ndx": df["ndx"].loc[ret.index],
+                "ma250": df["ndx"].rolling(250).mean().loc[ret.index],
+                "high252": df["ndx"].rolling(252, min_periods=252).max().loc[ret.index],
+                "strategy_ret": ret,
+                "equity": (1 + ret).cumprod(),
+            }).join(sig[["state", "vix10", "dd", "target"]])
+            out.to_csv(p_ndx, encoding="utf-8-sig")
+            generate_soxl_backtest_csv()
+            print(f"[자동 갱신 완료] 최신 기준일({str(out.index[-1])[:10]}) 반영 완료")
+        except Exception as e:
+            print(f"[경고] 최신 데이터 자동 다운로드 실패 (기존 CSV 사용): {e}")
 
 
 def _extract_strategy_payload(csv_path: Path, index_col_name: str, index_label: str,
@@ -119,11 +171,16 @@ def _extract_strategy_payload(csv_path: Path, index_col_name: str, index_label: 
 def generate_dashboard(csv_path="backtest_result.csv", out_html="dashboard.html",
                        soxl_csv_path="backtest_result_soxl.csv"):
     p_ndx = Path(csv_path) if Path(csv_path).is_absolute() else (BASE_DIR / csv_path)
+    p_sox = Path(soxl_csv_path) if Path(soxl_csv_path).is_absolute() else (BASE_DIR / soxl_csv_path)
+    out_html_path = Path(out_html) if Path(out_html).is_absolute() else (BASE_DIR / out_html)
+
+    # CSV가 최신 미국장 기준일보다 오래되었으면 자동 갱신 시도
+    if "--skip-refresh" not in sys.argv:
+        auto_refresh_csv_if_stale(p_ndx, p_sox)
+
     if not p_ndx.exists():
         raise FileNotFoundError(f"{p_ndx} 파일이 없습니다. 먼저 ndx_regime_backtest.py를 실행해 주세요.")
 
-    p_sox = Path(soxl_csv_path) if Path(soxl_csv_path).is_absolute() else (BASE_DIR / soxl_csv_path)
-    out_html_path = Path(out_html) if Path(out_html).is_absolute() else (BASE_DIR / out_html)
     if not p_sox.exists():
         try:
             from soxl_regime_backtest import generate_soxl_backtest_csv
@@ -163,6 +220,9 @@ def generate_dashboard(csv_path="backtest_result.csv", out_html="dashboard.html"
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#020617" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="레짐전략 대시보드" />
@@ -181,21 +241,24 @@ def generate_dashboard(csv_path="backtest_result.csv", out_html="dashboard.html"
     <div class="max-w-5xl mx-auto space-y-2.5">
       <div class="flex items-center justify-between text-xs">
         <div class="flex items-center gap-2">
-          <span class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          <span class="font-semibold text-slate-200">미국장 기준일: <span id="top-date">{ndx_data['date']}</span></span>
+          <span id="live-dot" class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span class="font-semibold text-slate-200">미국장 기준일: <span id="top-date" class="text-emerald-300 font-mono">{ndx_data['date']}</span></span>
+          <button id="btn-live-sync" onclick="syncLatestData(true)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-indigo-300 border border-slate-700 transition">
+            🔄 최신 동기화
+          </button>
         </div>
-        <span class="text-slate-400 font-mono">갱신: {now_kst}</span>
+        <span id="top-sync-time" class="text-slate-400 font-mono text-[11px]">갱신: {now_kst}</span>
       </div>
 
       <!-- 전략 선택 탭 (NDX vs SOX) -->
       <div class="grid grid-cols-2 gap-2 bg-slate-900 p-1 rounded-xl border border-slate-800">
         <button id="tab-NDX" onclick="switchTab('NDX')" class="flex flex-col sm:flex-row items-center justify-between px-3 py-2 rounded-lg text-xs font-bold transition bg-indigo-600 text-white shadow">
           <span class="flex items-center gap-1.5">📈 나스닥 100 (<span class="font-mono">^NDX</span>)</span>
-          <span class="mt-0.5 sm:mt-0 px-2 py-0.5 rounded-full text-[11px] bg-black/25 font-mono">{ndx_data['short_badge']}</span>
+          <span id="tab-badge-NDX" class="mt-0.5 sm:mt-0 px-2 py-0.5 rounded-full text-[11px] bg-black/25 font-mono">{ndx_data['short_badge']}</span>
         </button>
         <button id="tab-SOX" onclick="switchTab('SOX')" class="flex flex-col sm:flex-row items-center justify-between px-3 py-2 rounded-lg text-xs font-bold transition text-slate-400 hover:text-slate-200">
           <span class="flex items-center gap-1.5">⚡ 반도체 (<span class="font-mono">^SOX</span>)</span>
-          <span class="mt-0.5 sm:mt-0 px-2 py-0.5 rounded-full text-[11px] bg-slate-800 font-mono">{sox_data['short_badge']}</span>
+          <span id="tab-badge-SOX" class="mt-0.5 sm:mt-0 px-2 py-0.5 rounded-full text-[11px] bg-slate-800 font-mono">{sox_data['short_badge']}</span>
         </button>
       </div>
     </div>
@@ -512,7 +575,6 @@ def generate_dashboard(csv_path="backtest_result.csv", out_html="dashboard.html"
       currentTab = tabKey;
       const d = STRATEGIES[tabKey];
 
-      // 탭 버튼 스타일 업데이트
       const btnNdx = document.getElementById('tab-NDX');
       const btnSox = document.getElementById('tab-SOX');
       if (tabKey === 'NDX') {{
@@ -524,6 +586,8 @@ def generate_dashboard(csv_path="backtest_result.csv", out_html="dashboard.html"
       }}
 
       document.getElementById('top-date').textContent = d.date;
+      document.getElementById('tab-badge-NDX').textContent = STRATEGIES.NDX.short_badge;
+      document.getElementById('tab-badge-SOX').textContent = STRATEGIES.SOX.short_badge;
 
       // 1. 상단 히어로 카드 업데이트
       document.getElementById('hero-subtitle').textContent =
@@ -623,6 +687,212 @@ def generate_dashboard(csv_path="backtest_result.csv", out_html="dashboard.html"
       }});
     }}
 
+    // ---------------- 브라우저 실시간 기준일 동기화 엔진 ----------------
+    function applyStrategyMeta(d) {{
+      if (d.curr_tgt === d.agg_name) {{
+        d.hero_title = '🔥 ' + d.agg_label;
+        d.short_badge = '🔥 ' + d.agg_name + ' (3x)';
+        d.prev_sim = 'BULL_AGG';
+      }} else if (d.curr_tgt === d.def_name) {{
+        d.hero_title = '🛡️ ' + d.def_label;
+        d.short_badge = '🛡️ 1.5x 방어';
+        d.prev_sim = (d.curr_state === 'BULL') ? 'BULL_DEF' : 'BEAR';
+      }} else {{
+        d.hero_title = '💵 현금 100% (0.0배 대피)';
+        d.short_badge = '💵 CASH (0x)';
+        d.prev_sim = 'BEAR';
+      }}
+    }}
+
+    async function fetchCsvNoCache(filename, tabKey, pxCol, retColPrefer) {{
+      const res = await fetch(`./${{filename}}?t=${{Date.now()}}`, {{ cache: 'no-store' }});
+      if (!res.ok) return false;
+      const text = await res.text();
+      const lines = text.trim().split(/\\r?\\n/);
+      if (lines.length < 5) return false;
+      const headers = lines[0].replace(/^\\uFEFF/, '').split(',');
+      const idxDate = 0;
+      const idxPx = headers.indexOf(pxCol);
+      const idxMa = headers.indexOf('ma250');
+      const idxState = headers.indexOf('state');
+      const idxVix = headers.indexOf('vix10');
+      const idxDd = headers.indexOf('dd');
+      const idxTgt = headers.indexOf('target');
+      let idxRet = headers.indexOf(retColPrefer);
+      if (idxRet < 0) idxRet = headers.indexOf('strategy_ret');
+
+      const rows = [];
+      for (let i = Math.max(1, lines.length - 35); i < lines.length; i++) {{
+        const cols = lines[i].split(',');
+        if (!cols[idxTgt]) continue;
+        rows.push(cols);
+      }}
+      if (rows.length < 2) return false;
+      const today = rows[rows.length - 1];
+      const prev = rows[rows.length - 2];
+      const newDate = today[idxDate].slice(0, 10);
+      const d = STRATEGIES[tabKey];
+      if (newDate < d.date) return false;
+
+      d.date = newDate;
+      d.curr_tgt = today[idxTgt];
+      d.prev_tgt = prev[idxTgt];
+      d.changed = d.curr_tgt !== d.prev_tgt;
+      d.curr_state = today[idxState];
+      d.curr_vix10 = parseFloat(parseFloat(today[idxVix]).toFixed(2));
+      d.curr_dd = parseFloat((parseFloat(today[idxDd]) * 100).toFixed(2));
+      if (idxPx >= 0 && idxMa >= 0 && today[idxPx] && today[idxMa]) {{
+        const px = parseFloat(today[idxPx]);
+        const ma = parseFloat(today[idxMa]);
+        d.curr_ma_ratio = parseFloat((px / ma * 100).toFixed(1));
+        d.sub_text = `${{d.index_label}} ${{px.toLocaleString('en-US', {{minimumFractionDigits:1, maximumFractionDigits:1}})}} / 250일선 ${{ma.toLocaleString('en-US', {{minimumFractionDigits:1, maximumFractionDigits:1}})}} (${{d.curr_ma_ratio.toFixed(1)}}%)`;
+      }}
+      d.recent30 = rows.slice(-30).reverse().map(c => ({{
+        date: c[idxDate].slice(0, 10),
+        state: c[idxState],
+        vix10: parseFloat(parseFloat(c[idxVix]).toFixed(2)),
+        dd: parseFloat((parseFloat(c[idxDd]) * 100).toFixed(2)),
+        target: c[idxTgt],
+        ret: parseFloat((parseFloat(c[idxRet] || 0) * 100).toFixed(2)),
+      }}));
+      applyStrategyMeta(d);
+      return true;
+    }}
+
+    async function fetchYahooChart(symbol) {{
+      const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${{encodeURIComponent(symbol)}}?range=2y&interval=1d`;
+      const proxies = [
+        `https://corsproxy.io/?${{encodeURIComponent(targetUrl)}}`,
+        `https://api.allorigins.win/raw?url=${{encodeURIComponent(targetUrl)}}`
+      ];
+      for (const url of proxies) {{
+        try {{
+          const r = await fetch(url, {{ cache: 'no-store' }});
+          if (!r.ok) continue;
+          const j = await r.json();
+          const res = j?.chart?.result?.[0];
+          if (!res) continue;
+          const ts = res.timestamp || [];
+          const closes = res.indicators?.quote?.[0]?.close || [];
+          const out = [];
+          for (let i = 0; i < ts.length; i++) {{
+            if (closes[i] != null && closes[i] > 0) {{
+              // 뉴욕 시간 기준 날짜 추출
+              const dtStr = new Date(ts[i] * 1000).toLocaleDateString('en-CA', {{ timeZone: 'America/New_York' }});
+              out.push({{ date: dtStr, close: closes[i] }});
+            }}
+          }}
+          if (out.length > 255) return out;
+        }} catch (e) {{}}
+      }}
+      return null;
+    }}
+
+    function updateFromLiveBars(tabKey, idxBars, vixMap) {{
+      const d = STRATEGIES[tabKey];
+      const latestBar = idxBars[idxBars.length - 1];
+      if (!latestBar || latestBar.date <= d.date) return false;
+
+      // 최근 252개 종가로 MA250 및 52주 고점 대비 낙폭 계산
+      const n = idxBars.length;
+      const last250 = idxBars.slice(n - 250).map(x => x.close);
+      const last252 = idxBars.slice(n - 252).map(x => x.close);
+      const ma250 = last250.reduce((a, b) => a + b, 0) / last250.length;
+      const high252 = Math.max(...last252);
+      const px = latestBar.close;
+      const maRatio = (px / ma250) * 100.0;
+      const ddPct = (1.0 - px / high252) * 100.0;
+
+      // VIX10 계산
+      const vixVals = [];
+      for (let i = n - 1; i >= 0 && vixVals.length < 10; i--) {{
+        const v = vixMap.get(idxBars[i].date);
+        if (v != null) vixVals.push(v);
+      }}
+      const vix10 = vixVals.length === 10
+        ? (vixVals.reduce((a, b) => a + b, 0) / 10.0)
+        : d.curr_vix10;
+
+      // 직전 상태 대비 레짐 및 타겟 판별
+      const prevState = d.curr_state;
+      const prevTgt = d.curr_tgt;
+      let newState = prevState;
+      if (maRatio > 101.0) newState = 'BULL';
+      else if (maRatio < 95.0) newState = 'BEAR';
+
+      let newTgt = prevTgt;
+      if (newState === 'BULL') {{
+        let def = false;
+        if (prevState !== 'BULL') def = !(vix10 < 28.0 && ddPct <= 9.0);
+        else if (prevTgt !== d.agg_name) def = !(vix10 < 25.0 && ddPct <= 7.0);
+        else def = (vix10 >= 28.0 || ddPct > 9.0);
+        newTgt = def ? d.def_name : d.agg_name;
+      }} else {{
+        newTgt = (vix10 < 18.0) ? d.def_name : 'CASH';
+      }}
+
+      d.prev_tgt = prevTgt;
+      d.curr_tgt = newTgt;
+      d.changed = (d.curr_tgt !== d.prev_tgt);
+      d.curr_state = newState;
+      d.curr_vix10 = parseFloat(vix10.toFixed(2));
+      d.curr_dd = parseFloat(ddPct.toFixed(2));
+      d.curr_ma_ratio = parseFloat(maRatio.toFixed(1));
+      d.date = latestBar.date;
+      d.sub_text = `${{d.index_label}} ${{px.toLocaleString('en-US', {{minimumFractionDigits:1, maximumFractionDigits:1}})}} / 250일선 ${{ma250.toLocaleString('en-US', {{minimumFractionDigits:1, maximumFractionDigits:1}})}} (${{maRatio.toFixed(1)}}%)`;
+
+      if (d.recent30.length === 0 || d.recent30[0].date !== latestBar.date) {{
+        d.recent30.unshift({{
+          date: latestBar.date,
+          state: newState,
+          vix10: d.curr_vix10,
+          dd: d.curr_dd,
+          target: newTgt,
+          ret: 0.0,
+        }});
+        d.recent30 = d.recent30.slice(0, 30);
+      }}
+      applyStrategyMeta(d);
+      return true;
+    }}
+
+    async function syncLatestData(manual = false) {{
+      const btn = document.getElementById('btn-live-sync');
+      if (btn) btn.textContent = '⏳ 확인 중...';
+      let updated = false;
+
+      try {{
+        // 1단계: 서버 최신 CSV 무캐시 조회
+        const [u1, u2] = await Promise.all([
+          fetchCsvNoCache('backtest_result.csv', 'NDX', 'ndx', 'strategy_ret'),
+          fetchCsvNoCache('backtest_result_soxl.csv', 'SOX', 'sox', 'strategy_ret_hybrid')
+        ]);
+        if (u1 || u2) updated = true;
+      }} catch (e) {{}}
+
+      try {{
+        // 2단계: Yahoo Finance 실시간 종가 조회 (GitHub Actions 미실행/지연 대비)
+        const [ndxBars, soxBars, vixBars] = await Promise.all([
+          fetchYahooChart('^NDX'),
+          fetchYahooChart('^SOX'),
+          fetchYahooChart('^VIX')
+        ]);
+        if (vixBars && (ndxBars || soxBars)) {{
+          const vixMap = new Map(vixBars.map(x => [x.date, x.close]));
+          if (ndxBars && updateFromLiveBars('NDX', ndxBars, vixMap)) updated = true;
+          if (soxBars && updateFromLiveBars('SOX', soxBars, vixMap)) updated = true;
+        }}
+      }} catch (e) {{}}
+
+      switchTab(currentTab);
+      const nowStr = new Date().toLocaleString('ko-KR', {{ timeZone: 'Asia/Seoul', hour12: false }});
+      document.getElementById('top-sync-time').textContent = '동기화: ' + nowStr;
+      if (btn) btn.textContent = updated ? '✅ 최신 반영됨' : '🔄 최신 상태';
+      if (manual) {{
+        setTimeout(() => {{ if (btn) btn.textContent = '🔄 최신 동기화'; }}, 2500);
+      }}
+    }}
+
     [simMa, simVix, simDd].forEach(el => el.addEventListener('input', updateSim));
     document.querySelectorAll('input[name="sim-prev"]').forEach(el => el.addEventListener('change', updateSim));
     document.getElementById('sim-reset').addEventListener('click', () => {{
@@ -637,8 +907,9 @@ def generate_dashboard(csv_path="backtest_result.csv", out_html="dashboard.html"
     yrSelect.addEventListener('change', updateCalc);
     capInput.addEventListener('input', updateCalc);
 
-    // 초기 렌더링
+    // 초기 렌더링 후 즉시 백그라운드 최신 기준일 동기화 실행
     switchTab('NDX');
+    syncLatestData(false);
   </script>
 </body>
 </html>
@@ -648,7 +919,7 @@ def generate_dashboard(csv_path="backtest_result.csv", out_html="dashboard.html"
     idx_p = out_p.parent / "index.html"
     idx_p.write_text(html, encoding="utf-8")
 
-    print(f"[완료] 모바일/웹 대시보드(NDX + SOX 탭 통합) 생성 완료: {out_p} (및 index.html)")
+    print(f"[완료] 모바일/웹 대시보드(NDX + SOX 탭 통합, 최신 기준일: {ndx_data['date']}) 생성 완료: {out_p}")
     if "--no-open" not in sys.argv and "--serve" not in sys.argv:
         webbrowser.open(out_p.as_uri())
     return out_p
